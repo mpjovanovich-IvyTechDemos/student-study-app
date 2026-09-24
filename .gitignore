@@ -39,4 +39,4 @@ temp/
 
 # Captured class data
 server/class_data.db
-server/class_data.csv
+server/student_data.csv

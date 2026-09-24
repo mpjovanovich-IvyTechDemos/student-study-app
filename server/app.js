@@ -8,7 +8,7 @@ const port = 3000;
 const app = express();
 app.use(cors());
 
-const CSV_PATH = path.join(__dirname, "class_data.csv");
+const CSV_PATH = path.join(__dirname, "student_data.csv");
 const CSV_HEADER = "name,learning_style,tech_hours,submitted_at";
 const LEARNING_STYLES = ["Reading", "Watching", "Listening", "Practicing"];
 
