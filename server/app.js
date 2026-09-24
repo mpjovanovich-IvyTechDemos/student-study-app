@@ -1,84 +1,129 @@
-// Basic Express app with SQLite
+// Basic Express app that appends each submission to a single CSV file
 const express = require("express");
-const sqlite3 = require("sqlite3").verbose();
 const cors = require("cors");
-const port = 3000;
+const fs = require("fs");
 const path = require("path");
 
+const port = 3000;
 const app = express();
 app.use(cors());
 
-// Database setup
-const db = new sqlite3.Database("./class_data.db");
-db.serialize(() => {
-  // Modalities table
-  db.run(`CREATE TABLE IF NOT EXISTS modalities (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    modality_name TEXT UNIQUE NOT NULL
-  )`);
+const CSV_PATH = path.join(__dirname, "class_data.csv");
+const CSV_HEADER = "name,learning_style,tech_hours,submitted_at";
+const LEARNING_STYLES = ["Reading", "Watching", "Listening", "Practicing"];
 
-  // Students table with foreign key to modalities
-  db.run(`CREATE TABLE IF NOT EXISTS students (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    modality_id INTEGER,
-    tech_hours REAL NOT NULL,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (modality_id) REFERENCES modalities(id)
-  )`);
+function ensureCsv() {
+  if (!fs.existsSync(CSV_PATH)) {
+    fs.writeFileSync(CSV_PATH, `${CSV_HEADER}\n`);
+  }
+}
 
-  // Pre-populate the learning modalities
-  const modalities = ["Reading", "Watching", "Listening", "Practicing"];
-  modalities.forEach((modality) => {
-    db.run(
-      `INSERT OR IGNORE INTO modalities (modality_name) VALUES (?)`,
-      modality
+function csvEscape(value) {
+  const text = String(value);
+  if (/[",\n\r]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+}
+
+function parseCsvLine(line) {
+  const fields = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (inQuotes) {
+      if (char === '"') {
+        if (line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        current += char;
+      }
+    } else if (char === '"') {
+      inQuotes = true;
+    } else if (char === ",") {
+      fields.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+
+  fields.push(current);
+  return fields;
+}
+
+function readStudents() {
+  const text = fs.readFileSync(CSV_PATH, "utf8");
+  const lines = text.split(/\r?\n/).filter((line) => line.length > 0);
+  const rows = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const [name, learning_style, tech_hours, submitted_at] = parseCsvLine(
+      lines[i],
     );
-  });
-});
+    rows.push({ name, learning_style, tech_hours, submitted_at });
+  }
 
-// Middleware
+  rows.sort((a, b) => (a.submitted_at < b.submitted_at ? 1 : -1));
+  return rows;
+}
+
+ensureCsv();
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, "../client")));
 
-// Routes
 app.post("/api/submit", (req, res) => {
-  const { name, modality_id, tech_hours } = req.body;
-  const stmt = db.prepare(
-    `INSERT INTO students (name, modality_id, tech_hours) VALUES (?, ?, ?)`
-  );
-  stmt.run(name, modality_id, tech_hours);
-  stmt.finalize();
-  res.redirect("/");
-});
+  const { name, learning_style, tech_hours } = req.body;
+  const hours = Number(tech_hours);
 
-app.get("/api/students", (req, res) => {
-  db.all(
-    `
-    SELECT s.name, m.modality_name, s.tech_hours 
-    FROM students s
-    JOIN modalities m ON s.modality_id = m.id
-    ORDER BY s.timestamp DESC
-  `,
-    (err, rows) => {
-      if (err) {
-        res.status(500).json({ error: err.message });
-        return;
-      }
-      res.json(rows);
-    }
-  );
-});
+  if (
+    typeof name !== "string" ||
+    name.trim() === "" ||
+    !LEARNING_STYLES.includes(learning_style) ||
+    !Number.isFinite(hours) ||
+    hours < 0 ||
+    hours > 168
+  ) {
+    res.status(400).json({ error: "Invalid submission" });
+    return;
+  }
 
-app.get("/api/modalities", (req, res) => {
-  db.all("SELECT * FROM modalities", (err, rows) => {
+  const line =
+    [
+      csvEscape(name.trim()),
+      csvEscape(learning_style),
+      csvEscape(hours),
+      csvEscape(new Date().toISOString()),
+    ].join(",") + "\n";
+
+  fs.appendFile(CSV_PATH, line, (err) => {
     if (err) {
       res.status(500).json({ error: err.message });
       return;
     }
-    res.json(rows);
+    res.json({ ok: true });
   });
+});
+
+app.get("/api/students", (req, res) => {
+  try {
+    const rows = readStudents().map(({ name, learning_style, tech_hours }) => ({
+      name,
+      learning_style,
+      tech_hours,
+    }));
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.listen(port, () => {

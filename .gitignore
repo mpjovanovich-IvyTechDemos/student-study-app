@@ -37,5 +37,6 @@ tmp/
 temp/
 .tmp/
 
-# DB
+# Captured class data
 server/class_data.db
+server/class_data.csv
